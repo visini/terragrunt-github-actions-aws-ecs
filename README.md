@@ -52,7 +52,10 @@ make init
 make push-images
 ```
 
-Subsequent push to CORRESPONDING GIT BRANCH `xxxxx` will trigger deployment via GitHub Actions.
+Subsequent push to branch will trigger deployment via GitHub Actions:
+
+- Branch `dev` will deploy to `stage` environment
+- Branch `main` will deploy to `prod` environment
 
 ### Manual apply / destroy
 
