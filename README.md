@@ -1,4 +1,4 @@
-# terragrunt-ecs
+# terragrunt-github-actions-aws-ecs
 
 This project leverages [Terragrunt](https://github.com/gruntwork-io/terragrunt), [Terraform](https://www.terraform.io/), and [GitHub Actions](https://github.com/features/actions) to deploy a basic web app (dockerized JS frontend and dockerized Python API) to [AWS ECS](https://aws.amazon.com/ecs/).
 
