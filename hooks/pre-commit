@@ -1,0 +1,23 @@
+#!/bin/bash 
+
+declare -A lookup=(
+    ['aws_account_id = "111111111111"']='./terraform/infrastructure/main/account.terragrunt.hcl'
+    ['app_name = "example-app"']='./terraform/common.terragrunt.hcl'
+    ['app_domain_name = "app.example.com"']='./terraform/common.terragrunt.hcl'
+    ['route53_hosted_zone_name = "example.com"']='./terraform/common.terragrunt.hcl'
+    ['traefik.http.routers.frontend.rule: Host(`dev.lan`)']="./docker-compose.yml"
+    ['traefik.http.routers.api.rule: Host(`dev.lan`)']="./docker-compose.yml"
+)
+
+echo "Checking for non-generic values in project files in pre-commit hook..."
+
+for i in "${!lookup[@]}"; do
+    j=${lookup[$i]}
+    if ! grep -q "$i" $j; then
+        echo "Use generic ${i} in ${j} before comitting!"
+        echo "Exiting..."
+        exit 1
+    fi
+done
+
+echo "All good! Proceeding with commit..."

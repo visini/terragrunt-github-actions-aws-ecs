@@ -1,0 +1,6 @@
+{
+    "NODE_ENV": {
+        "value": "development",
+        "description": "Frontend node environment"
+    }
+}

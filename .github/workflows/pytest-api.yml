@@ -1,0 +1,40 @@
+name: Pytest API
+
+on:
+  pull_request:
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["self-hosted"]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.8"
+
+      - name: Update pip
+        run: |
+          python -m pip install --upgrade pip
+
+      - name: Install poetry
+        run: |
+          # Install Poetry
+          curl -sSL https://raw.githubusercontent.com/python-poetry/poetry/master/get-poetry.py | POETRY_HOME=/opt/poetry python && \
+              cd /usr/local/bin && \
+              poetry config virtualenvs.create false
+
+      - name: Install dependencies via poetry
+        run: |
+          cd ./containers/api/app && poetry install
+
+      - name: Test with pytest
+        run: |
+          cd ./containers/api/app && SECRET_KEY=pytest ENVIRONMENT=pytest DEBUG=1 poetry run pytest tests/

@@ -1,0 +1,47 @@
+version: "3.7"
+services:
+  traefik:
+    image: traefik:v2.3
+    command:
+      - --api.insecure=1
+      - --entrypoints.web.address=:80
+      - --providers.docker.exposedByDefault=false
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "80:80"
+      - "443:443"
+
+  frontend:
+    build:
+      context: ./containers/frontend
+    command: npm run start
+    volumes:
+      - ./containers/frontend/app:/usr/src/app
+    labels:
+      traefik.enable: "true"
+      traefik.port: 3000
+      traefik.http.services.frontend.loadbalancer.server.port: 3000
+      traefik.http.routers.frontend.rule: Host(`dev.lan`)
+    environment:
+      NODE_ENV: "development"
+      ENVIRONMENT: "dev"
+
+  api:
+    container_name: api
+    build:
+      context: ./containers/api
+    command: /start-reload.sh
+    volumes:
+      - ./containers/api/app:/app
+    labels:
+      traefik.enable: "true"
+      traefik.port: 80
+      traefik.http.services.api.loadbalancer.server.port: 80
+      traefik.http.routers.api.rule: Host(`dev.lan`) && PathPrefix(`/api`)
+      ## Since AWS ELB does not support path rewrite, we need to manually prefix routes
+      ## See app/main.py for details
+    environment:
+      SECRET_KEY: "dev_secret_key"
+      DEBUG: "true"
+      ENVIRONMENT: "dev"

@@ -1,0 +1,200 @@
+name: Terragrunt
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Checkout code, setup target_push and tf_env
+  # --------------------------------------------------------------------------
+  setup:
+    needs: []
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["self-hosted"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Install hclq
+        run: |
+          curl -sSLo install.sh https://install.hclq.sh
+          sh install.sh
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{secrets.AWS_ACCESS_KEY_ID}}
+          aws-secret-access-key: ${{secrets.AWS_SECRET_ACCESS_KEY}}
+          aws-region: ${{secrets.AWS_REGION}}
+
+      - name: Set steps.target_push.outputs.target_push
+        id: target_push
+        if: github.event_name == 'push' && (endsWith(github.ref, '/main') || endsWith(github.ref, '/dev'))
+        run: echo "::set-output name=target_push::true"
+
+      - name: Set TF_ENV=stage for branch dev
+        if: |
+          (github.event_name == 'push' && endsWith(github.ref, '/dev')) ||
+          (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'dev')
+        run: echo "TF_ENV=stage" >> $GITHUB_ENV
+
+      - name: Set TF_ENV=prod for branch main
+        if: |
+          (github.event_name == 'push' && endsWith(github.ref, '/main')) ||
+          (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main')
+        run: echo "TF_ENV=prod" >> $GITHUB_ENV
+
+      - name: Set steps.tf_env.outputs.tf_env based on $TF_ENV
+        id: tf_env
+        run: echo "::set-output name=tf_env::$TF_ENV"
+
+    outputs:
+      target_push: ${{steps.target_push.outputs.target_push}}
+      tf_env: ${{steps.tf_env.outputs.tf_env}}
+
+  # --------------------------------------------------------------------------
+  # Push to ECR if target_push
+  # --------------------------------------------------------------------------
+  ecr:
+    needs: ["setup"]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["self-hosted"]
+        # which container(s) to push to ECR? e.g., ["frontend", "api"]
+        container: ["frontend", "api"]
+    runs-on: ${{ matrix.os }}
+    if: needs.setup.outputs.target_push
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{secrets.AWS_ACCESS_KEY_ID}}
+          aws-secret-access-key: ${{secrets.AWS_SECRET_ACCESS_KEY}}
+          aws-region: ${{secrets.AWS_REGION}}
+
+      - name: Set variables from Terragrunt locals configuration
+        id: terragrunt_locals
+        run: |
+          common_terragrunt_file="./terraform/common.terragrunt.hcl"
+          #account_terragrunt_file="terraform/infrastructure/$account/account.terragrunt.hcl"
+          #region_terragrunt_file="terraform/infrastructure/$account/$region/region.terragrunt.hcl"
+
+          app_name=$(cat $common_terragrunt_file | hclq get ".locals.app_name" | tr -d '"')
+          echo "::add-mask::$app_name"
+          echo "::set-output name=app_name::$app_name"
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: For each service (matrix) - Build, tag, and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ steps.terragrunt_locals.outputs.app_name }}-${{needs.setup.outputs.tf_env}}-${{matrix.container}}
+          IMAGE_TAG: ${{github.sha}}
+        run: |
+          cd ./containers/${{ matrix.container }} && docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+  # --------------------------------------------------------------------------
+  # Terraform for deployment targets
+  # Based on tf_env (pull request -> plan; push to branch -> apply)
+  # --------------------------------------------------------------------------
+  terraform:
+    needs: ["setup"]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["self-hosted"]
+        # which deployment target(s) should be applied? e.g., ["services/app"]
+        target: ["services/app"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{secrets.AWS_ACCESS_KEY_ID}}
+          aws-secret-access-key: ${{secrets.AWS_SECRET_ACCESS_KEY}}
+          aws-region: ${{secrets.AWS_REGION}}
+
+      - name: Override GitHub SHA in common.terragrunt.hcl
+        run: |
+          cat ./terraform/common.terragrunt.hcl | hclq set ".locals.github_sha" "${{github.sha}}" > ./terraform/common.terragrunt.tmp
+          rm ./terraform/common.terragrunt.hcl
+          mv ./terraform/common.terragrunt.tmp ./terraform/common.terragrunt.hcl
+
+          # needed for self-hosted runner from myoung34/github-runner, since node is not installed
+      # hashicorp/setup-terraform@v1 --> requires node!
+      - uses: actions/setup-node@v2-beta
+        with:
+          node-version: "12"
+
+      - name: Setup Terraform 0.13.5
+        uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_version: 0.13.5
+          terraform_wrapper: true
+      - name: Setup Terraform version
+        run: terraform -v
+      - name: Setup Terraform wrapper path
+        run: which terraform
+      - name: Install Terragrunt v0.26.4
+        run: |
+          sudo wget -q -O /bin/terragrunt "https://github.com/gruntwork-io/terragrunt/releases/download/v0.26.4/terragrunt_linux_amd64"
+          sudo chmod +x /bin/terragrunt
+          terragrunt -v
+
+      - name: Terragrunt Format
+        id: fmt
+        run: cd ./terraform/infrastructure/main/${{secrets.AWS_REGION}}/${{needs.setup.outputs.tf_env}}/${{matrix.target}} && terragrunt validate
+
+      - name: Terragrunt Init
+        id: init
+        run: cd ./terraform/infrastructure/main/${{secrets.AWS_REGION}}/${{needs.setup.outputs.tf_env}}/${{matrix.target}} && terragrunt init
+
+      - name: Terragrunt Plan
+        id: plan
+        if: github.event_name == 'pull_request'
+        run: cd ./terraform/infrastructure/main/${{secrets.AWS_REGION}}/${{needs.setup.outputs.tf_env}}/${{matrix.target}} && terragrunt plan -no-color
+        continue-on-error: true
+
+      - name: Create Comment with Terraform Plan Output
+        uses: actions/github-script@0.9.0
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+            <details><summary>Show Plan</summary>
+
+            \`\`\`${process.env.PLAN}\`\`\`
+            </details>
+
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+              
+            github.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+      - name: Terragrunt Apply
+        if: needs.setup.outputs.target_push
+        run: cd ./terraform/infrastructure/main/${{secrets.AWS_REGION}}/${{needs.setup.outputs.tf_env}}/${{matrix.target}} && terragrunt apply -auto-approve

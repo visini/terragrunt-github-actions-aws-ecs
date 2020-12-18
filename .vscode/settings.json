@@ -1,0 +1,4 @@
+{
+  "python.analysis.extraPaths": ["./containers/api/app"],
+  "python.venvPath": "~/.cache/pypoetry/virtualenvs/"
+}

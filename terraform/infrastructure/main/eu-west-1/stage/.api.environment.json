@@ -1,0 +1,6 @@
+{
+    "DEBUG": {
+        "value": "true",
+        "description": "API debug environment"
+    }
+}
