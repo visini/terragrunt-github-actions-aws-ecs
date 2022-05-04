@@ -2,6 +2,6 @@
 # terragrunt.hcl configuration.
 locals {
   account_name   = "main"
-  aws_account_id = "111111111111"
+  aws_account_id = "361101115020"
   aws_profile    = "default"
 }
